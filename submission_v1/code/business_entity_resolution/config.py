@@ -42,14 +42,10 @@ COUNTRIES = ["US", "India", "France"]
 
 # --- Blocking ---------------------------------------------------------------
 N_RARE_NAME = 3            # rarest name tokens per record used in keys
-N_RARE_ADDR = 2            # rarest address tokens per record used in num_addr keys
-N_RARE_ADDR_PAIR = 3       # rarest address tokens paired up in addr_pair keys
-BUCKET_CAP = 2000          # skip key buckets with more S1 x Sx pairs than this...
-KEY_CAPS = {"rare_loc": 300, "addr_pair": 300}   # ...or this, for the keys that make many pairs
+N_RARE_ADDR = 2            # rarest address tokens per record used in keys
+BUCKET_CAP = 2000          # skip key buckets with more S1 x Sx pairs than this
 KEEP_PER_S1 = 25           # after cheap scoring: keep top-k candidates per S1 entity...
 KEEP_PER_SX = 5            # ...that also rank in the top-k S1 entities for the record
-KEEP_ADDR = 5              # also keep the top-k by address similarity on both sides (same address,
-ADDR_KEEP_MIN = 0.8        # different brand name), if the address similarity is at least this
 
 # --- Matching model ---------------------------------------------------------
 TRAIN_S1_FRACTION = 1.0    # share of train S1 entities used to fit the model (lower if RAM is short)

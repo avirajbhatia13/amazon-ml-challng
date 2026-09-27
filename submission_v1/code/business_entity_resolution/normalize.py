@@ -60,8 +60,6 @@ def _tokens(expr):
 def normalise_names(names, tok_dict):
     s = ascii_series(names, tok_dict)
     s = s.str.replace_all(MOJIBAKE, " ").str.to_lowercase().str.replace_all(r"['’`]", "").str.strip_chars()
-    s = s.str.replace_all(r"\(\s*id\s*:\s*[\[(]?\s*\d+\s*[\])]?\s*\)?", " ")   # "(ID: 90108)" record-id junk
-    s = s.str.replace_all(r"[\[\](){}]", " ")   # "([L.L.C.])" -> " L.L.C. " so the dots can be joined
     s = _join_dotted(s)
     is_domain = s.str.contains(DOMAIN)
     s = s.str.replace(DOMAIN, "${1}")

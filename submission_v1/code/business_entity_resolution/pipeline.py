@@ -4,12 +4,10 @@ re-run independently (e.g. retrain without recomputing features).
   learn      learn native-script dictionaries from train labels
   normalize  raw TSV -> cache/{split}_{country}/part-*.parquet
   featurize  blocking + features -> cache/{split}_{country}_feats.parquet
-  train      stage 1 (pair model) and stage 2 (pair judged against its competitors, see
-             stage2.py): grouped CV, threshold/policy search, final models -> models/matcher.pkl
+  train      grouped CV, threshold/policy search, final model -> models/matcher.pkl
   predict    test features -> output/matching_results.tsv + candidate_pairs.tsv
 """
 import pickle
-import warnings
 import zlib
 
 import numpy as np
@@ -19,7 +17,6 @@ from sklearn.model_selection import GroupKFold
 import blocking
 import features
 import normalize
-import stage2
 import translit
 import config
 from config import COUNTRIES, N_FOLDS, RANDOM_STATE, THRESHOLDS, P, log
@@ -28,7 +25,6 @@ from io_utils import (load_ground_truth_pairs, read_source, write_candidates,
 from metric import decide, fmt, score
 
 META = ["s1", "m", "src", "country"]
-warnings.filterwarnings("ignore", message="X does not have valid feature names")
 
 
 def learn():
@@ -69,16 +65,8 @@ def _report_recall(rec, truth, union, pruned):
          .join(idx.rename({"id": "m", "i": "b"}), on="m").select("a", "b"))
     if t.height == 0:
         return
-    hit = union.join(t, on=["a", "b"])
-    r_union = hit.height / t.height
+    r_union = union.join(t, on=["a", "b"]).height / t.height
     r_pruned = pruned.join(t, on=["a", "b"]).height / t.height
-    per_key = []
-    keys = hit["keys"].to_numpy()
-    for bit, name in enumerate(blocking.KEY_NAMES):
-        on = (keys >> bit) & 1
-        only = keys == (1 << bit)
-        per_key.append(f"{name} {on.sum() / t.height:.3f}/{only.sum() / t.height:.3f}")
-    log("    recall per key (any/only): " + "  ".join(per_key))
     log(f"    BLOCKING RECALL  keys: {r_union:.4f}   after pruning: {r_pruned:.4f}   ({t.height:,} true pairs)")
 
 
@@ -87,45 +75,18 @@ def _load_feats(split):
     return pl.concat(parts, how="diagonal")
 
 
-def new_model(stage=1):
-    """stage 1: the pair model; stage 2: a smaller model on stage-1 output + group context."""
+def new_model():
     try:
         import lightgbm as lgb
-        if stage == 1:
-            return lgb.LGBMClassifier(n_estimators=600, learning_rate=0.05, num_leaves=127,
-                                      min_child_samples=50, subsample=0.8, subsample_freq=1,
-                                      colsample_bytree=0.8, reg_lambda=1.0, n_jobs=-1, verbose=-1,
-                                      random_state=RANDOM_STATE)
-        return lgb.LGBMClassifier(n_estimators=300, learning_rate=0.05, num_leaves=63,
-                                  min_child_samples=100, subsample=0.8, subsample_freq=1,
+        return lgb.LGBMClassifier(n_estimators=600, learning_rate=0.05, num_leaves=127,
+                                  min_child_samples=50, subsample=0.8, subsample_freq=1,
                                   colsample_bytree=0.8, reg_lambda=1.0, n_jobs=-1, verbose=-1,
                                   random_state=RANDOM_STATE)
     except Exception:   # lightgbm missing, or libomp missing on macOS
         from sklearn.ensemble import HistGradientBoostingClassifier
-        return HistGradientBoostingClassifier(max_iter=400 if stage == 1 else 250, learning_rate=0.08,
-                                              max_leaf_nodes=127 if stage == 1 else 63,
+        return HistGradientBoostingClassifier(max_iter=400, learning_rate=0.08, max_leaf_nodes=127,
                                               min_samples_leaf=50, l2_regularization=1.0,
                                               early_stopping=False, random_state=RANDOM_STATE)
-
-
-def _cv(stage, X, y, folds):
-    oof = np.zeros(len(y), np.float32)
-    for k, (tr, va) in enumerate(folds):
-        oof[va] = new_model(stage).fit(X[tr], y[tr]).predict_proba(X[va])[:, 1]
-        log(f"  stage {stage} fold {k + 1}/{len(folds)} done")
-    return oof
-
-
-def _search(scored, truth, s1_ids, label, policies=("all", "excl")):
-    """Best (macro F0.5, threshold, policy) on out-of-fold probabilities."""
-    best = None
-    for policy in policies:
-        res = [(score(decide(scored, t, policy), truth, s1_ids)["macro_f05"], t) for t in THRESHOLDS]
-        s, t = max(res)
-        log(f"  {label} policy {policy:>4}: best CV macro F0.5 = {s:.4f} at threshold {t}")
-        if best is None or s > best[0]:
-            best = (s, t, policy)
-    return best
 
 
 def _in_fraction(col, frac):
@@ -152,34 +113,33 @@ def train():
 
     X = df.select(feat_cols).to_numpy()
     groups = df["s1"].hash().to_numpy()
-    folds = list(GroupKFold(n_splits=N_FOLDS).split(X, y, groups))
-    oof1 = _cv(1, X, y, folds)
-    scored1 = df.select("s1", "m").with_columns(prob=oof1)
-    s1_best = _search(scored1, truth, s1_ids, "stage 1", policies=("excl",))
-    model1 = new_model(1).fit(X, y)
-    log("fitted final stage-1 model")
+    oof = np.zeros(len(y), np.float32)
+    for k, (tr, va) in enumerate(GroupKFold(n_splits=N_FOLDS).split(X, y, groups)):
+        oof[va] = new_model().fit(X[tr], y[tr]).predict_proba(X[va])[:, 1]
+        log(f"  fold {k + 1}/{N_FOLDS} done")
 
-    G = stage2.group_features(df.select("s1", "m", "src").with_columns(prob=oof1), "train")
-    X = np.hstack([X, G.to_numpy()])
-    oof = _cv(2, X, y, folds)
     scored = df.select("s1", "m").with_columns(prob=oof)
-    best = _search(scored, truth, s1_ids, "stage 2")
+    best = None
+    for policy in ("all", "excl"):
+        res = [(score(decide(scored, t, policy), truth, s1_ids)["macro_f05"], t) for t in THRESHOLDS]
+        s, t = max(res)
+        log(f"  policy {policy:>4}: best CV macro F0.5 = {s:.4f} at threshold {t}")
+        if best is None or s > best[0]:
+            best = (s, t, policy)
     _, t, policy = best
     log(f"CHOSEN policy={policy} threshold={t}: " + fmt(score(decide(scored, t, policy), truth, s1_ids)))
-    log(f"  (stage 1 alone: {s1_best[0]:.4f}; predicting nothing would score "
-        f"{score(scored.head(0).select('s1', 'm'), truth, s1_ids)['macro_f05']:.4f})")
+    log(f"  (predicting nothing would score {score(scored.head(0).select('s1', 'm'), truth, s1_ids)['macro_f05']:.4f})")
 
-    model2 = new_model(2).fit(X, y)
+    model = new_model().fit(X, y)
     with open(P.model, "wb") as fh:
-        pickle.dump({"model": model1, "features": feat_cols, "model2": model2, "features2": G.columns,
-                     "threshold": t, "policy": policy, "cv_score": best[0], "cv_score_stage1": s1_best[0]}, fh)
+        pickle.dump({"model": model, "features": feat_cols, "threshold": t, "policy": policy,
+                     "cv_score": best[0]}, fh)
     log(f"saved {P.model}")
     pred = decide(scored, t, policy).with_columns(pred=pl.lit(1, pl.Int8))
-    (scored.with_columns(p1=oof1, label=y).join(pred, on=["s1", "m"], how="left")
+    (scored.with_columns(label=y).join(pred, on=["s1", "m"], how="left")
      .with_columns(pl.col("pred").fill_null(0)).write_parquet(P.dev / "oof.parquet"))
     truth.join(df.select("s1", "m"), on=["s1", "m"], how="anti").write_parquet(P.dev / "blocking_misses.parquet")
-    _importance(model1, feat_cols)
-    _importance(model2, feat_cols + G.columns)
+    _importance(model, feat_cols)
 
 
 def _importance(model, cols):
@@ -192,24 +152,12 @@ def _importance(model, cols):
 def predict():
     with open(P.model, "rb") as fh:
         bundle = pickle.load(fh)
-    parts = []
-    for country in COUNTRIES:   # one country at a time: groups never span countries
-        if not _feats_path("test", country).exists():
-            continue
-        df = pl.read_parquet(_feats_path("test", country))
-        for c in bundle["features"]:
-            if c not in df.columns:
-                df = df.with_columns(pl.lit(0.0).alias(c))
-        X = df.select(bundle["features"]).to_numpy()
-        p1 = bundle["model"].predict_proba(X)[:, 1]
-        prob = p1
-        if bundle.get("model2") is not None:
-            G = stage2.group_features(df.select("s1", "m", "src").with_columns(prob=p1), "test", [country])
-            prob = bundle["model2"].predict_proba(np.hstack([X, G.select(bundle["features2"]).to_numpy()]))[:, 1]
-        parts.append(df.select("s1", "m").with_columns(prob=prob, p1=p1))
-        log(f"  scored test/{country}: {df.height:,} pairs")
-        del df, X
-    scored = pl.concat(parts)
+    df = _load_feats("test")
+    for c in bundle["features"]:
+        if c not in df.columns:
+            df = df.with_columns(pl.lit(0.0).alias(c))
+    prob = bundle["model"].predict_proba(df.select(bundle["features"]).to_numpy())[:, 1]
+    scored = df.select("s1", "m").with_columns(prob=prob)
     scored.write_parquet(P.dev / "test_scores.parquet")
     pred = decide(scored, bundle["threshold"], bundle["policy"])
     s1_ids = read_source(P.data / "test", 1)["entity_id"]

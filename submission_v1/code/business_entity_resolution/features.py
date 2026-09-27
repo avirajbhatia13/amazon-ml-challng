@@ -1,9 +1,7 @@
 """Pairwise features for pruned candidate pairs, computed in chunks.
 
   name      fuzzy scores on sorted / ordered / glued names, IDF-weighted token overlap,
-            rarity of the rarest shared token, exact-key flags, legal form agreement,
-            and whether the words found on one side only are typos of each other
-            ("pharma" / "praa") or different words ("nelson" / "white": a look-alike)
+            rarity of the rarest shared token, exact-key flags, legal form agreement
   address   fuzzy scores, IDF-weighted overlap, numbers (house no.) agreement, state
   context   how common the name is (chains), which blocking keys fired, and how the
             candidate ranks against its competitors for the same S1 entity and for
@@ -13,7 +11,6 @@ import numpy as np
 import polars as pl
 from rapidfuzz import fuzz
 from rapidfuzz.distance import JaroWinkler
-from rapidfuzz.process import cpdist
 
 from blocking import KEY_NAMES, fuzzy
 from config import FEATURE_CHUNK
@@ -43,29 +40,6 @@ def _idf_overlap(ta, tb, idf, prefix):
     }
 
 
-def _one_sided(ta, tb, idf, prefix, typo=0.8):
-    """Tokens found on one side only: each is matched to its most similar token on the other
-    side's one-sided list. Similar (>= typo) means a spelling change; dissimilar a different word."""
-    d = pl.DataFrame({"ta": ta, "tb": tb}).with_row_index("r").select(
-        "r", oa=pl.col("ta").list.set_difference("tb"), ob=pl.col("tb").list.set_difference("ta"))
-    ea = d.select("r", x=pl.col("oa")).explode("x").drop_nulls("x")
-    eb = d.select("r", x=pl.col("ob")).explode("x").drop_nulls("x")
-    j = ea.join(eb, on="r", suffix="_o")
-    j = j.with_columns(sim=cpdist(j["x"].to_list(), j["x_o"].to_list(), workers=-1, dtype=np.float32,
-                                  scorer=JaroWinkler.normalized_similarity))
-    best = pl.concat([ea.join(j.group_by("r", "x").agg(best=pl.col("sim").max()), on=["r", "x"], how="left"),
-                      eb.join(j.group_by("r", "x_o").agg(best=pl.col("sim").max()).rename({"x_o": "x"}),
-                              on=["r", "x"], how="left")]).with_columns(pl.col("best").fill_null(0.0))
-    best = best.join(idf, left_on="x", right_on="t", how="left").with_columns(pl.col("idf").fill_null(0.0))
-    agg = best.group_by("r").agg(
-        n_typo=(pl.col("best") >= typo).sum(), n_sub=(pl.col("best") < typo).sum(),
-        sub_idf=pl.when(pl.col("best") < typo).then(pl.col("idf")).otherwise(0.0).sum(),
-        soft_min=pl.col("best").min())
-    out = (d.select("r").join(agg, on="r", how="left").sort("r")
-           .with_columns(pl.col("n_typo", "n_sub", "sub_idf").fill_null(0), pl.col("soft_min").fill_null(1.0)))
-    return {f"{prefix}_{c}": out[c].to_numpy() for c in ("n_typo", "n_sub", "sub_idf", "soft_min")}
-
-
 def _chunk_features(rec, p, idf_name, idf_addr):
     a, b = p["a"], p["b"]
     A = rec[a.to_numpy()]
@@ -83,8 +57,6 @@ def _chunk_features(rec, p, idf_name, idf_addr):
     }
     f.update(_idf_overlap(A["name_toks"], B["name_toks"], idf_name, "nm"))
     f.update(_idf_overlap(A["addr_toks"], B["addr_toks"], idf_addr, "ad"))
-    f.update(_one_sided(A["name_toks"], B["name_toks"], idf_name, "nm"))
-    f.update(_one_sided(A["addr_toks"], B["addr_toks"], idf_addr, "ad"))
     f.update(_idf_overlap(A["nums"], B["nums"], pl.DataFrame({"t": [], "idf": []},
                                                             schema={"t": pl.String, "idf": pl.Float64}), "num"))
     eq = pl.DataFrame({"na": A["name_key"], "nb": B["name_key"], "ca": A["compact"], "cb": B["compact"],

@@ -97,23 +97,6 @@ CITY_ALIASES = {
 }
 
 
-# France: sources name either the region ("Hauts-de-France") or the departement ("Nord"),
-# so both map to the region code. Keys are lowercase, accents already stripped.
-FRANCE_REGIONS = {
-    "HDF": ["hauts-de-france", "hauts de france", "nord", "pas-de-calais", "pas de calais", "aisne", "oise", "somme"],
-    "NAQ": ["nouvelle-aquitaine", "nouvelle aquitaine", "gironde", "landes", "dordogne", "lot-et-garonne",
-            "pyrenees-atlantiques", "charente", "charente-maritime", "correze", "creuse", "deux-sevres",
-            "vienne", "haute-vienne"],
-    "PDL": ["pays de la loire", "pays-de-la-loire", "loire-atlantique", "loire atlantique", "maine-et-loire",
-            "mayenne", "sarthe", "vendee"],
-    "IDF": ["ile-de-france", "ile de france", "paris", "seine-saint-denis", "hauts-de-seine", "val-de-marne",
-            "essonne", "yvelines", "val-d'oise", "seine-et-marne"],
-    "ARA": ["auvergne-rhone-alpes", "rhone"], "BFC": ["bourgogne-franche-comte"], "BRE": ["bretagne"],
-    "CVL": ["centre-val de loire"], "GES": ["grand est"], "NOR": ["normandie"], "OCC": ["occitanie"],
-    "PAC": ["provence-alpes-cote dazur", "provence-alpes-cote d'azur", "bouches-du-rhone"], "COR": ["corse"],
-}
-
-
 def state_map(country):
     """Address component (lowercase) -> canonical state code, for one country."""
     if country == "US":
@@ -125,6 +108,4 @@ def state_map(country):
         m.update({v: k for k, v in INDIA_STATES.items()})
         m.update(INDIA_STATE_ALIASES)
         return m
-    if country == "France":
-        return {name: code for code, names in FRANCE_REGIONS.items() for name in names}
     return {}

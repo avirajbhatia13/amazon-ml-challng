@@ -11,3 +11,6 @@ dist/
 *.parquet
 *.pkl
 *.zip
+
+# Submission prediction outputs (large)
+submission_v1/output/

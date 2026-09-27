@@ -78,14 +78,15 @@ stops after about 20 minutes of inactivity. Use this to check that each stage wo
 |---|---|---|
 | 1. Install | installs polars / rapidfuzz / unidecode (LightGBM is preinstalled) | 1 min |
 | 2. Find folders | locates the attached datasets; prints RAM / CPUs / disk | seconds |
-| 3a. learn + normalize-train | learns Hindi/Tamil/…→English words; cleans 12.5M train records | 10–20 min |
-| 3b. featurize-train | blocking + features; prints **BLOCKING RECALL** per country | 20–40 min |
-| 3c. train | 4-fold CV → prints **CV macro F0.5** + threshold; fits final model | 30–60 min |
-| 3d. test | cleans + featurizes test, writes predictions | 20–40 min |
+| 3a. learn + normalize-train | learns Hindi/Tamil/…→English words; cleans 12.5M train records | ~11 min |
+| 3b. featurize-train | blocking + features; prints **recall per key** and **BLOCKING RECALL** per country | 25–40 min |
+| 3c. train | stage 1 (pair model) then stage 2 (each pair judged against its competitors), 4-fold CV each → prints **CV macro F0.5** for both + threshold; fits final models | 75–100 min |
+| 3d. test | cleans + featurizes test, writes predictions | 40–55 min |
 | 4. Validate | copies the two files to `/kaggle/working/`, runs the official validator | 1 min |
 | 5. Clean up | deletes the large cache so the output fits Kaggle's 20 GB limit | seconds |
 
-\*Estimates. The first full run will tell us the real numbers.
+\*From the first full run (≈2 h in total), adjusted for the heavier second version (≈3–3.5 h).
+Use **Save & Run All (Commit)** for a run this long.
 
 ### Getting the results
 Open the notebook → **Output** tab (or the version's page) → download `matching_results.tsv`
