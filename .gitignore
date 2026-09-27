@@ -1,0 +1,13 @@
+# Environment
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Data and generated artifacts (too large / competition data)
+data/
+work/
+dist/
+*.parquet
+*.pkl
+*.zip
